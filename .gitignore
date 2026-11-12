@@ -19,3 +19,6 @@ docs/
 .env.*
 !.env.example
 deployer.key*
+deployments.env
+deploy-log.txt
+demo-log.txt
