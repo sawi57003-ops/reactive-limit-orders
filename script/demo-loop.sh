@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.foundry/bin:$PATH"
 
-UNI_RPC="https://sepolia.unichain.org"
+UNI_RPC="https://unichain-sepolia-rpc.publicnode.com"
 LASNA_RPC="https://lasna-rpc.rnk.dev"
 UNI_CHAIN=1301
 DEPLOYER="0xf64712c04cd1D62322A09B4609F6F33Bc8335585"
@@ -24,7 +24,19 @@ print(d['private_key'])
 source deployments.env
 for v in TOKEN_A TOKEN_B FEED AMM REGISTRY REACTIVE EXECUTOR; do test -n "${!v:-}" || { echo "missing $v in deployments.env — run deploy.sh first"; exit 1; }; done
 
-send_uni() { cast send --rpc-url "$UNI_RPC" --private-key "$KEY" --chain-id "$UNI_CHAIN" "$@" 2>&1 | tee -a demo-log.txt; }
+send_uni() { # send_uni TO SIG [ARGS...] — nonce eksplisit + retry 3x (RPC kadang balikin nonce basi)
+    local attempt nonce
+    for attempt in 1 2 3; do
+        nonce=$(cast nonce "$DEPLOYER" --rpc-url "$UNI_RPC")
+        if cast send --rpc-url "$UNI_RPC" --private-key "$KEY" --chain-id "$UNI_CHAIN" --nonce "$nonce" "$@" 2>&1 | tee -a demo-log.txt; then
+            return 0
+        fi
+        echo "send_uni attempt $attempt failed, retrying in 10s..." | tee -a demo-log.txt
+        sleep 10
+    done
+    echo "send_uni FAILED after 3 attempts: $*" | tee -a demo-log.txt
+    exit 1
+}
 call_uni() { cast call --rpc-url "$UNI_RPC" "$@"; }
 call_lasna() { cast call --rpc-url "$LASNA_RPC" "$@"; }
 
@@ -57,6 +69,7 @@ for i in $(seq 1 60); do
 done
 
 echo "== E. Create BELOW order: sell 10 dETH if price <= $BELOW_TH =="
+send_uni "$TOKEN_A" "approve(address,uint256)" "$REGISTRY" 10ether
 send_uni "$REGISTRY" "createOrder(address,address,uint256,uint256,bool,uint256)" "$TOKEN_A" "$TOKEN_B" 10ether "$BELOW_TH" false "$EXPIRY"
 echo "== F. Move the price to $BELOW_TH (triggers order 2) =="
 send_uni "$FEED" "setPrice(int256)" "$BELOW_TH"

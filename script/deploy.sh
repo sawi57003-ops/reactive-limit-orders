@@ -10,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.foundry/bin:$PATH"
 
-UNI_RPC="https://sepolia.unichain.org"
+UNI_RPC="https://unichain-sepolia-rpc.publicnode.com"
 LASNA_RPC="https://lasna-rpc.rnk.dev"
 SEPOLIA_RPC="https://ethereum-sepolia.publicnode.com"
 UNI_CHAIN=1301
@@ -45,19 +45,27 @@ need_funds "unichain-sepolia" "$UNI_RPC" "$DEPLOYER"
 need_funds "lasna" "$LASNA_RPC" "$DEPLOYER"
 
 deploy() { # deploy CHAIN RPC CONTRACT_PATH:NAME [VALUE] [ARGS...]
+    # Nonce diambil eksplisit per percobaan + retry 3x: RPC publik kadang
+    # balikin nonce basi (step 1 terkonfirmasi tapi step 2 dikirim nonce lama).
     local chain="$1" rpc="$2" path="$3" value="$4"; shift 4
-    local out addr
+    local out addr attempt nonce
     local args=()
     if [ "$#" -gt 0 ]; then args=(--constructor-args "$@"); fi
-    if [ -n "$value" ]; then
-        out=$(forge create --broadcast --rpc-url "$rpc" --private-key "$KEY" --chain-id "$chain" --value "$value" "$path" "${args[@]}" 2>&1)
-    else
-        out=$(forge create --broadcast --rpc-url "$rpc" --private-key "$KEY" --chain-id "$chain" "$path" "${args[@]}" 2>&1)
-    fi
-    echo "$out" | tee -a deploy-log.txt
-    addr=$(echo "$out" | grep -oE "Deployed to: 0x[0-9a-fA-F]{40}" | awk '{print $3}')
-    test -n "$addr"
-    echo "$addr"
+    for attempt in 1 2 3; do
+        nonce=$(cast nonce "$DEPLOYER" --rpc-url "$rpc")
+        if [ -n "$value" ]; then
+            out=$(forge create --broadcast --rpc-url "$rpc" --private-key "$KEY" --chain-id "$chain" --nonce "$nonce" --value "$value" "$path" "${args[@]}" 2>&1) || true
+        else
+            out=$(forge create --broadcast --rpc-url "$rpc" --private-key "$KEY" --chain-id "$chain" --nonce "$nonce" "$path" "${args[@]}" 2>&1) || true
+        fi
+        echo "$out" >> deploy-log.txt
+        addr=$(echo "$out" | grep -oE "Deployed to: 0x[0-9a-fA-F]{40}" | awk '{print $3}')
+        if [ -n "$addr" ]; then echo "$addr"; return 0; fi
+        echo "deploy attempt $attempt failed for $path, retrying in 10s..." >> deploy-log.txt
+        sleep 10
+    done
+    echo "deploy FAILED after 3 attempts: $path" >> deploy-log.txt
+    exit 1
 }
 
 send() { # send CHAIN RPC TO SIG [ARGS...] ; value via VALUE env (default 0)
@@ -108,9 +116,9 @@ if [ -z "${REACTIVE:-}" ]; then
     REACTIVE=$(deploy "$LASNA_CHAIN" "$LASNA_RPC" "src/LimitOrderReactive.sol:LimitOrderReactive" "2ether" "$UNI_CHAIN" "$REGISTRY" "$FEED")
     save REACTIVE "$REACTIVE"
 fi
-echo "== 9. LimitOrderExecutor on Unichain Sepolia (funded 0.01 ETH) =="
+echo "== 9. LimitOrderExecutor on Unichain Sepolia (funded 0.005 ETH) =="
 if [ -z "${EXECUTOR:-}" ]; then
-    EXECUTOR=$(deploy "$UNI_CHAIN" "$UNI_RPC" "src/LimitOrderExecutor.sol:LimitOrderExecutor" "0.01ether" "$PROXY_UNI" "$REACTIVE" "$REGISTRY" "$AMM")
+    EXECUTOR=$(deploy "$UNI_CHAIN" "$UNI_RPC" "src/LimitOrderExecutor.sol:LimitOrderExecutor" "0.005ether" "$PROXY_UNI" "$REACTIVE" "$REGISTRY" "$AMM")
     save EXECUTOR "$EXECUTOR"
 fi
 echo "== 10. Wire: registry executor + reactive executor =="

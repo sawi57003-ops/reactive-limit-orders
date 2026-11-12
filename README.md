@@ -6,9 +6,10 @@ Limit-order bot without a server, built on **Reactive Network (Omni)** for the
 a reactive contract watches the price feed and, when the threshold crosses,
 fires a callback that executes the swap on-chain. No bot, no keeper, no server.
 
-> Status (12 Nov 2026): code complete, **33/33 Foundry tests pass** (unit +
-> invariant). **Not deployed yet — blocked on testnet faucets** (see
-> [Blocker](#blocker-faucets-need-a-browser) below). No mainnet anywhere.
+> Status (12 Nov 2026): **DEPLOYED + FULL LOOP PROVEN on testnet, both
+> directions** — see [Live deployment](#live-deployment-12-nov-2026). Code
+> complete, **33/33 Foundry tests pass** (unit + invariant). No mainnet
+> anywhere.
 
 ## How it works
 
@@ -42,6 +43,41 @@ swept and never filled.
 | `LimitOrderRegistry` | Unichain Sepolia | Order escrow; create / cancel (refund) / fill (executor only, once) |
 | `LimitOrderReactive` | Lasna | Event mirror + threshold check + callback request |
 | `LimitOrderExecutor` | Unichain Sepolia | Callback receiver; proxy + reactive auth, anti-replay nonce, executes the swap |
+
+## Live deployment (12 Nov 2026)
+
+Deployer: `0xf64712c04cd1D62322A09B4609F6F33Bc8335585` (funded by the owner:
+0.0099999 Unichain Sepolia ETH + 5.145 lREACT on Lasna).
+
+| Contract | Chain | Address |
+|---|---|---|
+| DemoToken dETH | Unichain Sepolia | `0x325B2cDFF5f39f8DDA79fD5C2465706C620d64E8` |
+| DemoToken dUSD | Unichain Sepolia | `0xE2B49f1024EDc7752A3db532aA86E64693e7eea8` |
+| MockPriceFeed | Unichain Sepolia | `0xa5464dDB6e96AE3C65EB7711cf2e1baDa96ab9e9` |
+| DemoAMM | Unichain Sepolia | `0xCA2Df071A1bB3D13cFD7792f095a6288fa5A5af5` |
+| LimitOrderRegistry | Unichain Sepolia | `0xe42cf4340304Be622cc2f45dbc097D68b0164f3b` |
+| LimitOrderReactive | Lasna | `0x325B2cDFF5f39f8DDA79fD5C2465706C620d64E8` (same address as dETH — CREATE from the same deployer at nonce 0 on both chains; different bytecode, verified) |
+| LimitOrderExecutor | Unichain Sepolia | `0xF9fcA2ff15F4EF954B4dAc7F39e6920798EEF737` (funded 0.005 ETH) |
+
+### Full loop, proven on-chain (12 Nov 2026)
+
+**ABOVE order (sell 10 dETH at ≥ $2,100):** approve `0xd6727acc...` → createOrder
+`0xcecffb7a...` (order 1) → mirrored on Lasna (activeOrders=[1]) → feed set to
+$2,100 `0x2857c984...` (block 67612517) → **fill
+`0x58483da350e42e88b921a34e86f51d8ff1fb683a62b90829bcc4f2f13713aa54`** (block
+67612519): `OrderFilled` order 1, executor `0xF9fcA2...`; `OrderExecuted`
+amountIn 10 dETH, amountOut ~19,920 dUSD.
+
+**BELOW order (sell 10 dETH at ≤ $1,900):** approve `0xc7734d7f...` →
+createOrder `0x8df89618...` (order 2) → mirrored on Lasna (activeOrders=[2])
+→ feed set to $1,900 `0xbece147c...` (block 67612613) → **fill
+`0xd8ac27792f0366d3f87e4d898d33e135bbc30d4f7576d0c7199e59559d45ef83`** (block
+67612616): `OrderFilled` order 2; deployer dUSD 980,019,920 → 980,039,800
+(+19,880 dUSD).
+
+The execution price is set by the AMM pool (~$1,996 at the time), not the
+feed — the feed only triggers. The 0.3% fee + constant-product slippage
+explain the difference from the theoretical $21,000 / $19,000.
 
 ## Verified constants (checked live 12 Nov 2026)
 
@@ -89,36 +125,32 @@ bash script/demo-loop.sh   # order -> price move -> reactive trigger -> callback
 
 Deploy order: tokens + feed + AMM + registry on Unichain Sepolia →
 reactive on Lasna (funded 2 lREACT) → executor on Unichain Sepolia (funded
-0.01 ETH) → wire `setExecutor` on both sides. The demo loop creates an ABOVE
+0.005 ETH) → wire `setExecutor` on both sides. The demo loop creates an ABOVE
 order (sell 10 dETH at ≥ $2,100), moves the feed, waits for the fill, then
 repeats with a BELOW order (≤ $1,900). All tx hashes land in `deploy-log.txt`
 and `demo-log.txt`.
 
-Funding needed: ~0.05 Unichain Sepolia ETH (deploys + demo) and 0.1 Sepolia
-ETH (→ 10 lREACT via the faucet contract).
+Funding used: 0.0099999 Unichain Sepolia ETH (deploys + demo) and 0.049 Sepolia
+ETH (→ 5.145 lREACT via the faucet contract).
 
-## Blocker: faucets need a browser
+## Blocker: faucets (RESOLVED 12 Nov 2026)
 
-The deployer holds 0 testnet ETH (agent + burn wallets also hold 0 on Sepolia /
-Unichain Sepolia / Lasna). CLI faucet attempts all failed:
-
-- `https://faucet.unichain.org/` — unreachable from this VM (HTTP 000).
-- `https://app.uniswap.org/faucet`, Alchemy / QuickNode / Google Cloud /
-  Chainlink Sepolia faucets — pages load (HTTP 200) but are JS apps needing
-  wallet-connect / captcha / login; no public claim API found.
-
-To unblock: claim Unichain Sepolia ETH + Sepolia ETH for the deployer address
-above from a browser, then run `bash script/deploy.sh` and
-`bash script/demo-loop.sh`. After funding, the lREACT exchange is one CLI call:
+The deployer held 0 testnet ETH until the owner claimed 0.01 Unichain Sepolia
+ETH from the Superchain faucet (sign-in + connect wallet, 0.01 ETH/24h drip)
+and 0.05 Sepolia ETH from the Google Cloud Web3 faucet; 0.049 Sepolia ETH was
+swapped to 5.145 lREACT via the faucet contract
+(`0x9b9BB25f1A81078C544C829c5EB7822d747Cf434`). `faucet.unichain.org` was down
+entirely; paste-address-only routes (thirdweb, ethfaucet.com) all failed.
 
 ```bash
 cast send 0x9b9BB25f1A81078C544C829c5EB7822d747Cf434 --rpc-url https://ethereum-sepolia.publicnode.com --private-key <key> "request(address)" 0xf64712c04cd1D62322A09B4609F6F33Bc8335585 --value 0.1ether
 ```
 
-## Submission (prepared, not submitted)
+## Submission (ready — video + form left)
 
 - Track: Set It and Forget It. Deadline: 5 Dec 2026 (DoraHacks).
-- Repo: `reactive-limit-orders` (public). Submission needs: repo link,
-  deployed addresses, tx hashes of the full loop, demo video < 3 min.
+- Repo: `reactive-limit-orders` (public). Deployed addresses + full-loop tx
+  hashes: see [Live deployment](#live-deployment-12-nov-2026).
+- Remaining: demo video < 3 min + DoraHacks submission form.
 - Judging: Execution (on-chain reactive txs + callbacks), Integration,
   Usefulness, Craft — all equally weighted.
